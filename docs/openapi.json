@@ -1,0 +1,1349 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Frontier Markets Trading API",
+    "version": "1.0.0",
+    "description": "# Private Stock DEX API\n\nBuild privacy-focused ETH and stock-token swaps on Robinhood Chain (4663).\nFrontier combines locally encrypted trade instructions, batch processing, and fresh payout addresses.\nUse the API for market data and private order status, the TypeScript SDK for transaction preparation,\nand your wallet for signing and submission.\n\n## Quickstart\n\n1. Request a Frontier API key and store it in your server's secret manager.\n2. Fetch configuration and assets, then request a quote using raw integer units (18 decimals).\n3. Use the TypeScript SDK's prepareTrade with the reviewed request, quote, sender, and optional recipient.\n4. Persist the returned private intent/nonce before asking your own wallet to sign and broadcast the unsigned deposit.\n5. Poll order status with the deposit hash and that nonce. A 404 confirming response is a normal privacy-preserving result.\n\nSelling also requires sufficient ERC-20 allowance. Check it first; if necessary approve the exact amount,\nverify the approval receipt, then fetch and review a new quote before preparing the funding transaction.\nNever automatically create a second deposit after an uncertain wallet response.\n\n## SDK\n\nInstall @frontier-markets/privacy-sdk with npm install github:FrontierMarketsAI/private-stock-exchange.\nThe SDK validates responses, preserves the reviewed quote, and builds encrypted transaction calldata locally.\nFind installation instructions, runnable examples, and recovery guidance in the\n[SDK repository](https://github.com/FrontierMarketsAI/private-stock-exchange).\n\n## Authentication and privacy\n\nSend Authorization: Bearer <id>.<secret> with each request. Detailed order status also requires the private order nonce.\nKeep both credentials out of browser bundles, URLs, and logs. Save each private order bundle before funding.\nTo receive in a separate wallet, supply a recipient address you control; otherwise it defaults to the funding wallet.\nFresh payout addresses and batched execution are applied by Frontier during processing.\n\n## Timing and limits\n\nQuotes last at most 60 seconds. Default batch window: 25 seconds, followed by execution and verification time.\nService fee is currently 0%; network gas and pool fees still apply. Quotes may be previews while acceptingOrders is false.\nDo not fund unless configuration is current and accepting orders.\nEach API key and each IP independently have 240 requests/minute, with quote and status sublimits of 30 and 60/minute.\nA global 1,200 requests/minute cap and concurrency limits also apply. Quotas use fixed 60-second windows.\nPOST bodies are limited to 16 KiB; send parameters in the JSON body rather than query strings.\nYour application controls retries and status polling. Respect Retry-After and use bounded backoff.\n\n## Order tracking\n\nTrack a funded order with its deposit hash and saved nonce. Keep the original order after a timeout or uncertain wallet response;\ncheck that transaction instead of submitting another deposit. Contact support if status becomes attention.\nCompleted and refunded statuses reflect verified L2 execution. Integrations requiring stronger finality should wait for additional chain confirmation.\nUse a server-side SDK or HTTP client for authenticated requests."
+  },
+  "servers": [
+    {
+      "url": "https://priv.frontiermarkets.ai",
+      "description": "Production"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Markets",
+      "description": "Configuration and registered stock tokens. Registration does not guarantee liquidity."
+    },
+    {
+      "name": "Quotes",
+      "description": "Time-limited ETH and stock-token swap quotes."
+    },
+    {
+      "name": "Orders",
+      "description": "Order tracking using a deposit hash and private nonce."
+    }
+  ],
+  "security": [
+    {
+      "ApiKey": []
+    }
+  ],
+  "paths": {
+    "/api/v1/config": {
+      "get": {
+        "operationId": "getTradingConfig",
+        "tags": [
+          "Markets"
+        ],
+        "summary": "Get trading configuration",
+        "description": "Check acceptingOrders and paused before funding. Pin the expected vault and public encryption key out of band when possible.",
+        "responses": {
+          "200": {
+            "description": "Current public trading configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingConfig"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters, path, or JSON. Amounts must be canonical decimal strings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request host or supplied Origin is not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds 16 KiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "POST requires application/json without content encoding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request quota or concurrency limit exceeded. Back off; do not retry funding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying. The fixed-window quota may still be exhausted after this delay.",
+                "schema": {
+                  "type": "string",
+                  "example": "10"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or price data is temporarily unavailable. Retry the API request with bounded backoff; preserve any deposit already submitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assets": {
+      "get": {
+        "operationId": "listTradingAssets",
+        "tags": [
+          "Markets"
+        ],
+        "summary": "List stock tokens",
+        "description": "Select a registered stock by its catalog address, then request a quote to check liquidity for your amount.",
+        "responses": {
+          "200": {
+            "description": "Canonical stock catalog with current registration flags.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingAssetsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters, path, or JSON. Amounts must be canonical decimal strings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request host or supplied Origin is not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds 16 KiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "POST requires application/json without content encoding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request quota or concurrency limit exceeded. Back off; do not retry funding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying. The fixed-window quota may still be exhausted after this delay.",
+                "schema": {
+                  "type": "string",
+                  "example": "10"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or price data is temporarily unavailable. Retry the API request with bounded backoff; preserve any deposit already submitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/quote": {
+      "post": {
+        "operationId": "getTradingQuote",
+        "tags": [
+          "Quotes"
+        ],
+        "summary": "Get a buy or sell quote",
+        "description": "amount is the raw input amount, not a human decimal. buy uses ETH input; sell uses stock input. Pool fees are already included in amountOut. This call does not fund an order or reserve liquidity.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TradingQuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Time-limited quote. routeId is informational and does not lock the execution route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingQuote"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters, path, or JSON. Amounts must be canonical decimal strings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request host or supplied Origin is not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds 16 KiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "POST requires application/json without content encoding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "NO_POOL_ROUTE, NO_LIQUIDITY, or ASSET_CAPACITY. No quote is available for this request; adjust the amount or asset, or try again later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request quota or concurrency limit exceeded. Back off; do not retry funding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying. The fixed-window quota may still be exhausted after this delay.",
+                "schema": {
+                  "type": "string",
+                  "example": "10"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or price data is temporarily unavailable. Retry the API request with bounded backoff; preserve any deposit already submitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orders/status": {
+      "post": {
+        "operationId": "getTradingOrderStatus",
+        "tags": [
+          "Orders"
+        ],
+        "summary": "Get private order status",
+        "description": "API key and private nonce serve different purposes. Missing/wrong nonce, an unindexed deposit, and some early read failures deliberately look alike. Do not interpret confirming as proof of failure or submit a replacement deposit. Stop automatic funding on attention. Poll active orders conservatively and stop after a terminal result.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TradingStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated processing, completed, refunded, or attention status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingOrderStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters, path, or JSON. Amounts must be canonical decimal strings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string",
+                  "const": "Bearer"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request host or supplied Origin is not allowed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Normal privacy-preserving confirming result, not the generic error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmingStatus"
+                },
+                "example": {
+                  "status": "confirming",
+                  "depositHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "message": "Order is not available yet. Check the transaction and try again."
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds 16 KiB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "POST requires application/json without content encoding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request quota or concurrency limit exceeded. Back off; do not retry funding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying. The fixed-window quota may still be exhausted after this delay.",
+                "schema": {
+                  "type": "string",
+                  "example": "10"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or price data is temporarily unavailable. Retry the API request with bounded backoff; preserve any deposit already submitted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "id.secret",
+        "description": "Frontier API key sent as Authorization: Bearer <id>.<secret>. Store the credential server-side."
+      }
+    },
+    "schemas": {
+      "TradingConfig": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 2
+          },
+          "chainId": {
+            "type": "number",
+            "const": 4663
+          },
+          "chainName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "vault": {
+            "anyOf": [
+              {
+                "description": "Nonzero EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case.",
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "explorerUrl": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "encryptionPublicKey": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 66,
+                "maxLength": 66,
+                "pattern": "^0x[0-9a-fA-F]{64}$",
+                "description": "32 bytes of hexadecimal, normalized to lowercase."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxAmount": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 39,
+            "pattern": "^[1-9][0-9]*$",
+            "description": "Canonical decimal integer, 1 through 170141183460469231731687303715884105727, inclusive. No sign, exponent, or leading zeroes."
+          },
+          "feeBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9999
+          },
+          "minimumBatchSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "batchWindowSeconds": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 86400
+          },
+          "orderLifetimeSeconds": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 86400
+          },
+          "defaultSlippageBps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "maxSlippageBps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "acceptingOrders": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "starting",
+                  "online",
+                  "offline",
+                  "degraded"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "lastHeartbeatAt": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Unix timestamp in seconds."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "message",
+              "lastHeartbeatAt"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "chainId",
+          "chainName",
+          "vault",
+          "explorerUrl",
+          "encryptionPublicKey",
+          "maxAmount",
+          "feeBps",
+          "minimumBatchSize",
+          "batchWindowSeconds",
+          "orderLifetimeSeconds",
+          "defaultSlippageBps",
+          "maxSlippageBps",
+          "paused",
+          "acceptingOrders",
+          "service"
+        ]
+      },
+      "TradingAsset": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^[A-Z][A-Z0-9.-]*$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "address": {
+            "description": "Nonzero EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case.",
+            "type": "string",
+            "minLength": 42,
+            "maxLength": 42,
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "logoUrl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decimals": {
+            "type": "number",
+            "const": 18
+          },
+          "multiplier": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 97,
+            "pattern": "^(0|[1-9][0-9]*)(?:\\.([0-9]{1,18}))?$",
+            "description": "Positive decimal with at most 18 fractional digits; scaled by 10^18 it must fit uint256."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "symbol",
+          "name",
+          "address",
+          "logoUrl",
+          "decimals",
+          "multiplier",
+          "enabled",
+          "unavailableReason"
+        ]
+      },
+      "TradingAssetsResponse": {
+        "type": "object",
+        "properties": {
+          "assets": {
+            "maxItems": 10000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "symbol": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32,
+                  "pattern": "^[A-Z][A-Z0-9.-]*$"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "address": {
+                  "description": "Nonzero EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case.",
+                  "type": "string",
+                  "minLength": 42,
+                  "maxLength": 42,
+                  "pattern": "^0x[0-9a-fA-F]{40}$"
+                },
+                "logoUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048,
+                      "format": "uri"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "decimals": {
+                  "type": "number",
+                  "const": 18
+                },
+                "multiplier": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 97,
+                  "pattern": "^(0|[1-9][0-9]*)(?:\\.([0-9]{1,18}))?$",
+                  "description": "Positive decimal with at most 18 fractional digits; scaled by 10^18 it must fit uint256."
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "unavailableReason": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 2048
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "symbol",
+                "name",
+                "address",
+                "logoUrl",
+                "decimals",
+                "multiplier",
+                "enabled",
+                "unavailableReason"
+              ]
+            }
+          },
+          "updatedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Unix timestamp in seconds."
+          }
+        },
+        "required": [
+          "assets",
+          "updatedAt"
+        ]
+      },
+      "TradingQuoteRequest": {
+        "type": "object",
+        "properties": {
+          "stock": {
+            "description": "Nonzero EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case.",
+            "type": "string",
+            "minLength": 42,
+            "maxLength": 42,
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "buy",
+              "sell"
+            ]
+          },
+          "amount": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 39,
+            "pattern": "^[1-9][0-9]*$",
+            "description": "Canonical decimal integer, 1 through 170141183460469231731687303715884105727, inclusive. No sign, exponent, or leading zeroes."
+          },
+          "slippageBps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "stock",
+          "side",
+          "amount",
+          "slippageBps"
+        ],
+        "additionalProperties": false
+      },
+      "TradingQuote": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 2
+          },
+          "chainId": {
+            "type": "number",
+            "const": 4663
+          },
+          "vault": {
+            "description": "Nonzero EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case.",
+            "type": "string",
+            "minLength": 42,
+            "maxLength": 42,
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "stock": {
+            "description": "Nonzero EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case.",
+            "type": "string",
+            "minLength": 42,
+            "maxLength": 42,
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "buy",
+              "sell"
+            ]
+          },
+          "assetIn": {
+            "type": "string",
+            "minLength": 42,
+            "maxLength": 42,
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+          },
+          "assetOut": {
+            "type": "string",
+            "minLength": 42,
+            "maxLength": 42,
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+          },
+          "routeId": {
+            "type": "string",
+            "minLength": 66,
+            "maxLength": 66,
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "description": "32 bytes of hexadecimal, normalized to lowercase."
+          },
+          "amountIn": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 39,
+            "pattern": "^[1-9][0-9]*$",
+            "description": "Canonical decimal integer, 1 through 170141183460469231731687303715884105727, inclusive. No sign, exponent, or leading zeroes."
+          },
+          "feeAmount": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 39,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Canonical decimal integer, 0 through 170141183460469231731687303715884105727, inclusive. No sign, exponent, or leading zeroes."
+          },
+          "poolFees": {
+            "minItems": 1,
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          },
+          "amountOut": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 78,
+            "pattern": "^[1-9][0-9]*$",
+            "description": "Canonical decimal integer, 1 through 115792089237316195423570985008687907853269984665640564039457584007913129639935, inclusive. No sign, exponent, or leading zeroes."
+          },
+          "minAmountOut": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 78,
+            "pattern": "^[1-9][0-9]*$",
+            "description": "Canonical decimal integer, 1 through 115792089237316195423570985008687907853269984665640564039457584007913129639935, inclusive. No sign, exponent, or leading zeroes."
+          },
+          "slippageBps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "quotedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Unix timestamp in seconds."
+          },
+          "expiresAt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Unix timestamp in seconds."
+          }
+        },
+        "required": [
+          "version",
+          "chainId",
+          "vault",
+          "stock",
+          "side",
+          "assetIn",
+          "assetOut",
+          "routeId",
+          "amountIn",
+          "feeAmount",
+          "poolFees",
+          "amountOut",
+          "minAmountOut",
+          "slippageBps",
+          "quotedAt",
+          "expiresAt"
+        ]
+      },
+      "TradingStatusRequest": {
+        "type": "object",
+        "properties": {
+          "depositHash": {
+            "type": "string",
+            "minLength": 66,
+            "maxLength": 66,
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "description": "32 bytes of hexadecimal, normalized to lowercase."
+          },
+          "nonce": {
+            "type": "string",
+            "minLength": 66,
+            "maxLength": 66,
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "description": "32 bytes of hexadecimal, normalized to lowercase."
+          }
+        },
+        "required": [
+          "depositHash",
+          "nonce"
+        ],
+        "additionalProperties": false
+      },
+      "TradingOrderStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "depositHash": {
+                "type": "string",
+                "minLength": 66,
+                "maxLength": 66,
+                "pattern": "^0x[0-9a-fA-F]{64}$",
+                "description": "32 bytes of hexadecimal, normalized to lowercase."
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "status": {
+                "type": "string",
+                "const": "confirming"
+              }
+            },
+            "required": [
+              "depositHash",
+              "message",
+              "status"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "depositHash": {
+                "type": "string",
+                "minLength": 66,
+                "maxLength": 66,
+                "pattern": "^0x[0-9a-fA-F]{64}$",
+                "description": "32 bytes of hexadecimal, normalized to lowercase."
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Unix timestamp in seconds."
+              },
+              "assetIn": {
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$",
+                "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+              },
+              "assetOut": {
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$",
+                "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+              },
+              "status": {
+                "type": "string",
+                "const": "processing"
+              }
+            },
+            "required": [
+              "depositHash",
+              "message",
+              "expiresAt",
+              "assetIn",
+              "assetOut",
+              "status"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "depositHash": {
+                "type": "string",
+                "minLength": 66,
+                "maxLength": 66,
+                "pattern": "^0x[0-9a-fA-F]{64}$",
+                "description": "32 bytes of hexadecimal, normalized to lowercase."
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Unix timestamp in seconds."
+              },
+              "assetIn": {
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$",
+                "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+              },
+              "assetOut": {
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$",
+                "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+              },
+              "status": {
+                "type": "string",
+                "const": "attention"
+              }
+            },
+            "required": [
+              "depositHash",
+              "message",
+              "expiresAt",
+              "assetIn",
+              "assetOut",
+              "status"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "depositHash": {
+                "type": "string",
+                "minLength": 66,
+                "maxLength": 66,
+                "pattern": "^0x[0-9a-fA-F]{64}$",
+                "description": "32 bytes of hexadecimal, normalized to lowercase."
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Unix timestamp in seconds."
+              },
+              "assetIn": {
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$",
+                "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+              },
+              "assetOut": {
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$",
+                "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+              },
+              "status": {
+                "type": "string",
+                "const": "completed"
+              },
+              "outputAmount": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 78,
+                "pattern": "^[1-9][0-9]*$",
+                "description": "Canonical decimal integer, 1 through 115792089237316195423570985008687907853269984665640564039457584007913129639935, inclusive. No sign, exponent, or leading zeroes."
+              },
+              "payoutAddress": {
+                "description": "Nonzero EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case.",
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$"
+              },
+              "recipient": {
+                "description": "Nonzero EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case.",
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$"
+              }
+            },
+            "required": [
+              "depositHash",
+              "message",
+              "expiresAt",
+              "assetIn",
+              "assetOut",
+              "status",
+              "outputAmount",
+              "payoutAddress",
+              "recipient"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "depositHash": {
+                "type": "string",
+                "minLength": 66,
+                "maxLength": 66,
+                "pattern": "^0x[0-9a-fA-F]{64}$",
+                "description": "32 bytes of hexadecimal, normalized to lowercase."
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Unix timestamp in seconds."
+              },
+              "assetIn": {
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$",
+                "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+              },
+              "assetOut": {
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$",
+                "description": "EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case."
+              },
+              "status": {
+                "type": "string",
+                "const": "refunded"
+              },
+              "settlementHash": {
+                "type": "string",
+                "minLength": 66,
+                "maxLength": 66,
+                "pattern": "^0x[0-9a-fA-F]{64}$",
+                "description": "32 bytes of hexadecimal, normalized to lowercase."
+              },
+              "outputAmount": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 39,
+                "pattern": "^[1-9][0-9]*$",
+                "description": "Canonical decimal integer, 1 through 170141183460469231731687303715884105727, inclusive. No sign, exponent, or leading zeroes."
+              },
+              "recipient": {
+                "description": "Nonzero EVM address; mixed-case addresses must have a valid EIP-55 checksum. Normalized to checksum case.",
+                "type": "string",
+                "minLength": 42,
+                "maxLength": 42,
+                "pattern": "^0x[0-9a-fA-F]{40}$"
+              }
+            },
+            "required": [
+              "depositHash",
+              "message",
+              "expiresAt",
+              "assetIn",
+              "assetOut",
+              "status",
+              "settlementHash",
+              "outputAmount",
+              "recipient"
+            ]
+          }
+        ]
+      },
+      "ApiError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Z][A-Z0-9_]*$"
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 2048
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "ConfirmingStatus": {
+        "type": "object",
+        "properties": {
+          "depositHash": {
+            "type": "string",
+            "minLength": 66,
+            "maxLength": 66,
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "description": "32 bytes of hexadecimal, normalized to lowercase."
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "status": {
+            "type": "string",
+            "const": "confirming"
+          }
+        },
+        "required": [
+          "depositHash",
+          "message",
+          "status"
+        ]
+      }
+    }
+  }
+}
