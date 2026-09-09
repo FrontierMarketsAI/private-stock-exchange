@@ -1,0 +1,35 @@
+{
+  "name": "@frontier-markets/privacy-sdk",
+  "version": "0.1.0",
+  "description": "Frontier Markets API client and local encrypted, unsigned trade preparation for Robinhood Chain.",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "repository": { "type": "git", "url": "git+https://github.com/FrontierMarketsAI/private-stock-exchange.git" },
+  "homepage": "https://priv.frontiermarkets.ai/docs",
+  "bugs": { "url": "https://github.com/FrontierMarketsAI/private-stock-exchange/issues" },
+  "main": "./dist/index.js",
+  "types": "./dist/types/client/index.d.ts",
+  "exports": { ".": { "types": "./dist/types/client/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist", "README.md", "SECURITY.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "package:check": "node scripts/check-package.mjs",
+    "docs:update": "node scripts/update-openapi.mjs",
+    "check": "npm run typecheck && npm run build && npm test && npm run package:check"
+  },
+  "dependencies": { "libsodium-wrappers": "0.8.4", "viem": "2.56.3", "zod": "4.5.4" },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "13.0.0",
+    "@types/libsodium-wrappers": "0.7.14",
+    "@types/node": "24.10.1",
+    "esbuild": "0.28.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}

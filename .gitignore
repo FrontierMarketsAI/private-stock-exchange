@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+*.sqlite*
+*.db*
+*.tgz
+private-order*.json
+*.log
