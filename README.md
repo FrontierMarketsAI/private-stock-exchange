@@ -1,6 +1,7 @@
 # Frontier Private Stock Exchange SDK
 
 - Trading app: `https://priv.frontiermarkets.ai`
+- API key: `https://priv.frontiermarkets.ai/api-access`
 - API reference: `https://priv.frontiermarkets.ai/docs`
 - OpenAPI JSON: `https://priv.frontiermarkets.ai/openapi.json`
 
@@ -8,7 +9,7 @@
 
 Trade on Robinhood Chain with client-side intent encryption, fresh single-use payout addresses, and batched execution through Frontier Markets.
 
-`@frontier-markets/privacy-sdk` is a server-side Node.js 24 ESM package for quotes, local unsigned transaction preparation, and private order status. Your wallet stays in control of approvals, signing, and broadcasting.
+`@frontiermarkets/privacy-sdk` is a server-side Node.js 24 ESM package for quotes, local unsigned transaction preparation, and private order status. Your wallet stays in control of approvals, signing, and broadcasting.
 
 ## Contents
 
@@ -31,7 +32,7 @@ Trade on Robinhood Chain with client-side intent encryption, fresh single-use pa
 Use Node.js 24 and npm:
 
 ```sh
-npm install github:FrontierMarketsAI/private-stock-exchange
+npm install @frontiermarkets/privacy-sdk
 ```
 
 Allow the package's `prepare` lifecycle script so npm can build its ESM output during installation.
@@ -51,15 +52,15 @@ npm pack
 Install the resulting tarball in your integration project:
 
 ```sh
-npm install /absolute/path/to/private-stock-exchange/frontier-markets-privacy-sdk-0.1.0.tgz
+npm install /absolute/path/to/private-stock-exchange/frontiermarkets-privacy-sdk-0.1.0.tgz
 ```
 
 ## Quickstart
 
-Request a Frontier API key and inject it into your server's `FRONTIER_API_KEY` environment variable through your secret manager.
+[Create a Frontier API key](https://priv.frontiermarkets.ai/api-access) and inject it into your server's `FRONTIER_API_KEY` environment variable through your secret manager.
 
 ```ts
-import { FrontierClient } from '@frontier-markets/privacy-sdk';
+import { FrontierClient } from '@frontiermarkets/privacy-sdk';
 
 const apiKey = process.env.FRONTIER_API_KEY;
 if (!apiKey) throw new Error('FRONTIER_API_KEY is required');
@@ -122,7 +123,7 @@ The package root exports `FrontierClient`, `FrontierApiError`, public API types,
 ## Client Configuration
 
 ```ts
-import { FrontierClient } from '@frontier-markets/privacy-sdk';
+import { FrontierClient } from '@frontiermarkets/privacy-sdk';
 
 const client = new FrontierClient({
   apiKey: process.env.FRONTIER_API_KEY!,
@@ -265,7 +266,7 @@ Current limits use fixed 60-second windows:
 Shared network traffic can consume the same IP allowance. Concurrency limits may also reject requests. Respect `Retry-After` and use bounded backoff if requests remain rate-limited. POST bodies are limited to 16 KiB; API query strings are rejected.
 
 ```ts
-import { FrontierApiError } from '@frontier-markets/privacy-sdk';
+import { FrontierApiError } from '@frontiermarkets/privacy-sdk';
 
 try {
   const quote = await client.quote(request);
@@ -340,7 +341,7 @@ import type { Address, Hex } from 'viem';
 import type {
   TradingQuote, TradingConfig, TradingAssetsResponse, TradingOrderStatus,
   TradeIntent, FrontierServerCode, FrontierErrorCode,
-} from '@frontier-markets/privacy-sdk';
+} from '@frontiermarkets/privacy-sdk';
 
 interface FrontierClientOptions {
   apiKey: string;

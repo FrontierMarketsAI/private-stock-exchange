@@ -1,14 +1,19 @@
 {
-  "name": "@frontier-markets/privacy-sdk",
+  "name": "@frontiermarkets/privacy-sdk",
   "version": "0.1.0",
   "description": "Frontier Markets API client and local encrypted, unsigned trade preparation for Robinhood Chain.",
-  "private": true,
   "license": "UNLICENSED",
+  "author": {
+    "name": "Frontier Markets",
+    "url": "https://priv.frontiermarkets.ai"
+  },
+  "keywords": ["frontier-markets", "privacy", "sdk", "trading", "robinhood-chain", "ethereum", "typescript"],
   "type": "module",
   "engines": { "node": ">=24" },
   "repository": { "type": "git", "url": "git+https://github.com/FrontierMarketsAI/private-stock-exchange.git" },
   "homepage": "https://priv.frontiermarkets.ai/docs",
   "bugs": { "url": "https://github.com/FrontierMarketsAI/private-stock-exchange/issues" },
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
   "main": "./dist/index.js",
   "types": "./dist/types/client/index.d.ts",
   "exports": { ".": { "types": "./dist/types/client/index.d.ts", "import": "./dist/index.js" } },

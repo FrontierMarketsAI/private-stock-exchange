@@ -1,6 +1,6 @@
 # Contributing
 
-Contribute improvements to `@frontier-markets/privacy-sdk`, its examples, tests,
+Contribute improvements to `@frontiermarkets/privacy-sdk`, its examples, tests,
 and documentation. Use Node.js 24 and preserve the package's ESM interface.
 
 ## Local Checks
